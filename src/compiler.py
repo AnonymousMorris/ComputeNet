@@ -1,18 +1,21 @@
-"""
-Code Compiler
+"""Code Compiler
 Compiles C code to WebAssembly.
 """
 
 import subprocess
-import tempfile
 from pathlib import Path
+from typing import Optional
+
+from tempdir import TemporaryDirectory
 
 
 class Compiler:
     """Compiles C code to WebAssembly using clang."""
 
-    def __init__(self):
-        self.temp_dir = tempfile.mkdtemp(prefix='compiler_')
+    def __init__(self) -> None:
+        self._tempdir_ctx: Optional[TemporaryDirectory] = TemporaryDirectory(prefix="compiler_")
+        self._temp_path = self._tempdir_ctx.__enter__()
+        self.temp_dir = str(self._temp_path)
 
     def compile(self, code: str) -> Path:
         """
@@ -25,11 +28,14 @@ class Compiler:
             Path to compiled WASM file
         """
         # Write source file
-        source_file = Path(self.temp_dir) / "source.c"
+        if self._temp_path is None:
+            raise RuntimeError("Compiler temporary directory is not available")
+
+        source_file = self._temp_path / "source.c"
         source_file.write_text(code)
 
         # Compile to WASM
-        wasm_file = Path(self.temp_dir) / "output.wasm"
+        wasm_file = self._temp_path / "output.wasm"
 
         result = subprocess.run([
             'clang',
@@ -45,10 +51,15 @@ class Compiler:
 
         return wasm_file
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Clean up temporary files."""
-        import shutil
-        shutil.rmtree(self.temp_dir)
+        if self._tempdir_ctx is None:
+            return
+
+        self._tempdir_ctx.__exit__(None, None, None)
+        self._tempdir_ctx = None
+        self._temp_path = None
+        self.temp_dir = None
 
     def __enter__(self):
         return self
