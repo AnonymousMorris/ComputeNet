@@ -1,19 +1,42 @@
 import argparse, asyncio, json, uuid, random
 
-# WebRTC Channel, currently empty since I can just abstract it away for now
-class WebrtcChannel:
-    
+class TcpChannel:
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        self.reader, self.writer = reader, writer
+        self._handlers = []
+        self._closed = False
+
+    @classmethod
     async def connect(cls, host: str, port: int):
-        ...
-    
+        r, w = await asyncio.open_connection(host, port)
+        ch = cls(r, w)
+        asyncio.create_task(ch._reader_loop())
+        return ch
+
     async def send(self, obj: dict):
-        ...
-    
+        self.writer.write((json.dumps(obj) + "\n").encode())
+        await self.writer.drain()
+
     def on_message(self, cb):
-        ...
-    
+        self._handlers.append(cb)
+
     async def close(self):
-        ...
+        if not self._closed:
+            self._closed = True
+            self.writer.close()
+            await self.writer.wait_closed()
+
+    async def _reader_loop(self):
+        try:
+            while not self._closed:
+                line = await self.reader.readline()
+                if not line:
+                    break
+                msg = json.loads(line.decode())
+                for h in list(self._handlers):
+                    h(msg)
+        finally:
+            await self.close()
 
 # RPC Protocol
 """
@@ -37,7 +60,7 @@ Sample:
 }
 """
 class Rpc:
-    def __init__(self, ch: WebrtcChannel):
+    def __init__(self, ch: TcpChannel):
         self.ch = ch # connected to a channel (abstraction)
         self.waiters = {} # req_id -> future. Tracks which request is waiting for which response
         self.subs = {} # 
@@ -52,7 +75,7 @@ class Rpc:
         res = await asyncio.wait_for(fut, timeout=timeout)
 
         if res["type"] not in expect:
-            raise RuntimeError(f"unexpected {res["type"]}, expected {expect}")
+            raise RuntimeError(f"unexpected {res['type']}, expected {expect}")
         return res
     
     def subscribe(self, typ: str, handler):
@@ -82,7 +105,7 @@ async def choose_peer():
 
     for p in PEERS:
         try:
-            ch = await WebrtcChannel.connect(p["host"], p["port"]) # establish channel for current peer
+            ch = await TcpChannel.connect(p["host"], p["port"]) # establish channel for current peer
             rpc = Rpc(ch)
 
             res = await rpc.call("CAP_REQ", {}) # send a CAP_REQ, receive a CAP_RES
