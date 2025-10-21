@@ -103,6 +103,8 @@ class ComputeNode:
         for peer_id, peer in list(self._client.peers.items()):
             if not peer.connected:
                 continue
+            if peer.initiator:
+                continue
             if peer_id in self._peer_tasks:
                 continue
             self._logger.info("Spawning job handler for peer %s", peer_id)
@@ -159,6 +161,11 @@ class ComputeNode:
 
             if msg_type == "ping":
                 await self._send_message(peer, {"type": "pong", "echo": message.get("echo")})
+                continue
+
+            # Ignore response messages meant for the requesting side
+            if msg_type in ("ack", "result", "pong"):
+                logger.debug("Ignoring %s message (meant for requesting side)", msg_type)
                 continue
 
             await self._send_message(
