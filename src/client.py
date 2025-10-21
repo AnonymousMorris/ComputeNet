@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from aiortc import RTCPeerConnection, RTCSessionDescription
 import websockets
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
@@ -29,6 +28,13 @@ from message import (
 )
 
 from peer import Peer
+from webrtc_connection import (
+    create_initiator_connection,
+    create_offer,
+    create_responder_connection,
+    handle_offer_and_create_answer,
+    set_remote_answer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +101,8 @@ class Client:
 
         for peer in list(self.peers.values()):
             with contextlib.suppress(Exception):
-                await peer.rtc.close()
+                if peer.rtc is not None:
+                    await peer.rtc.close()
             self.peers.pop(peer.peer_id, None)
 
         logger.info("Client shut down")
@@ -135,7 +142,7 @@ class Client:
                 raise TimeoutError(f"Timed out waiting for peer {peer_id}")
             await asyncio.sleep(poll_interval)
 
-    async def request_conn_to_peer(self, target_id: str) -> RTCPeerConnection:
+    async def request_conn_to_peer(self, target_id: str):
         await self.connect()
         if self._connection is None:
             raise RuntimeError("Client is not connected")
@@ -149,26 +156,12 @@ class Client:
         if target_id in self.peers:
             raise RuntimeError(f"Peer connection with {target_id} already exists")
 
-        pc = RTCPeerConnection()
-        peer = Peer(peer_id=target_id, rtc=pc, initiator=True)
+        peer = Peer(peer_id=target_id, initiator=True)
+        pc = create_initiator_connection(target_id, peer)
+        peer.rtc = pc
         self.peers[target_id] = peer
 
-        channel = pc.createDataChannel("compute-net")
-        peer.attach_channel(channel)
-
-        @pc.on("connectionstatechange")  # type: ignore[misc]
-        def _on_state_change() -> None:
-            state = pc.connectionState
-            if state == "connected":
-                peer.mark_connected()
-            elif state in {"failed", "closed"}:
-                peer._ready.clear()
-            logger.info("Connection state with %s: %s", target_id, state)
-
-        offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-
-        description = {"sdp": offer.sdp, "type": offer.type}
+        description = await create_offer(pc)
         loop = asyncio.get_running_loop()
         answer_future = loop.create_future()
         self._pending_signals[target_id] = answer_future
@@ -181,8 +174,7 @@ class Client:
             self.peers.pop(target_id, None)
             raise
 
-        answer = RTCSessionDescription(**answer_description)
-        await pc.setRemoteDescription(answer)
+        await set_remote_answer(pc, answer_description)
         return pc
 
     async def connect_to_peer(
@@ -256,7 +248,7 @@ class Client:
                     future.set_exception(RuntimeError(reason))
                 self._pending_signals.pop(peer_id, None)
                 peer = self.peers.pop(peer_id, None)
-                if peer is not None:
+                if peer is not None and peer.rtc is not None:
                     asyncio.create_task(peer.rtc.close())
             logger.error("Server error: %s", reason)
             return
@@ -295,30 +287,16 @@ class Client:
         existing = self.peers.pop(source_id, None)
         if existing is not None:
             with contextlib.suppress(Exception):
-                await existing.rtc.close()
+                if existing.rtc is not None:
+                    await existing.rtc.close()
 
-        pc = RTCPeerConnection()
-        peer = Peer(peer_id=source_id, rtc=pc)
+        peer = Peer(peer_id=source_id)
+        pc = create_responder_connection(source_id, peer)
+        peer.rtc = pc
         self.peers[source_id] = peer
 
-        @pc.on("connectionstatechange")  # type: ignore[misc]
-        def _on_state_change() -> None:
-            state = pc.connectionState
-            if state == "connected":
-                peer.mark_connected()
-            elif state in {"failed", "closed"}:
-                peer._ready.clear()
-            logger.info("Connection state with %s: %s", source_id, state)
-
-        @pc.on("datachannel")  # type: ignore[misc]
-        def _on_datachannel(channel: RTCDataChannel) -> None:
-            peer.attach_channel(channel)
-
         try:
-            offer = RTCSessionDescription(**description)
-            await pc.setRemoteDescription(offer)
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
+            answer_description = await handle_offer_and_create_answer(pc, description)
         except Exception as exc:
             logger.exception("Failed to process offer from %s", source_id)
             self.peers.pop(source_id, None)
@@ -326,10 +304,7 @@ class Client:
             await self._send(build_connection_reject(source_id, str(exc)))
             return
 
-        response = build_connection_answer(
-            source_id,
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type},
-        )
+        response = build_connection_answer(source_id, answer_description)
         await self._send(response)
 
     def _handle_incoming_answer(self, message: Message) -> None:
@@ -346,7 +321,7 @@ class Client:
         if future and not future.done():
             future.set_exception(RuntimeError(reason))
         peer = self.peers.pop(source_id, None)
-        if peer is not None:
+        if peer is not None and peer.rtc is not None:
             asyncio.create_task(peer.rtc.close())
         logger.warning("Connection rejected by %s: %s", source_id, reason)
 
@@ -364,43 +339,3 @@ class Client:
         self._connection = None
         self._listener = None
         logger.info("Listener stopped")
-
-
-if __name__ == "__main__":  # pragma: no cover - convenience demo
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
-    async def _demo() -> None:
-        server_url = os.getenv("COMPUTENET_SERVER_URL", ClientConfig().server_url)
-        config = ClientConfig(server_url=server_url)
-        async with Client(config) as client:
-            try:
-                peers = await client.request_peer_list()
-            except Exception:
-                logger.exception("Failed to fetch peer list in demo")
-                return
-
-            if not peers:
-                logger.info("No peers currently registered")
-                return
-
-            target_id = next(iter(peers))
-            logger.info("Attempting demo connection to %s", target_id)
-            try:
-                peer = await client.connect_to_peer(
-                    target_id,
-                    timeout=config.connect_timeout,
-                )
-            except Exception:
-                logger.exception("Failed to establish demo connection with %s", target_id)
-                return
-
-            try:
-                await peer.send_with_retry("ping", timeout=5, label="demo")
-                logger.info("Demo ping sent to %s", target_id)
-            except Exception:
-                logger.exception("Demo ping failed for %s", target_id)
-
-    try:
-        asyncio.run(_demo())
-    except KeyboardInterrupt:
-        logger.info("Demo interrupted by user")

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class Peer:
     peer_id: str
-    rtc: RTCPeerConnection
+    rtc: RTCPeerConnection | None = None
     channel: RTCDataChannel | None = None
     initiator: bool = False
     _incoming: asyncio.Queue[Any] = field(default_factory=asyncio.Queue, init=False, repr=False)
@@ -36,8 +36,7 @@ class Peer:
             self._incoming.put_nowait(message)
 
     def mark_connected(self) -> None:
-        if not self._ready.is_set():
-            self._ready.set()
+        self._ready.set()
 
     async def connect(self, timeout: float | None = None) -> None:
         if timeout is None:
