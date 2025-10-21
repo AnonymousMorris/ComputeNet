@@ -162,7 +162,7 @@ class Client:
             if state == "connected":
                 peer.mark_connected()
             elif state in {"failed", "closed"}:
-                peer.connected = False
+                peer._ready.clear()
             logger.info("Connection state with %s: %s", target_id, state)
 
         offer = await pc.createOffer()
@@ -196,11 +196,7 @@ class Client:
 
         await self.request_conn_to_peer(target_id)
         peer = await self.wait_for_peer(target_id, timeout, poll_interval=poll_interval)
-        await peer.wait_channel_ready(
-            timeout,
-            label=f"initiator->{target_id}",
-            poll_interval=poll_interval,
-        )
+        await peer.connect(timeout)
         return peer
 
     async def _send(self, message: Message) -> None:
@@ -311,7 +307,7 @@ class Client:
             if state == "connected":
                 peer.mark_connected()
             elif state in {"failed", "closed"}:
-                peer.connected = False
+                peer._ready.clear()
             logger.info("Connection state with %s: %s", source_id, state)
 
         @pc.on("datachannel")  # type: ignore[misc]

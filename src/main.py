@@ -101,7 +101,7 @@ class ComputeNode:
 
         # Launch handlers for connected peers without an active task
         for peer_id, peer in list(self._client.peers.items()):
-            if not peer.connected:
+            if not peer._ready.is_set():
                 continue
             if peer.initiator:
                 continue
@@ -123,14 +123,14 @@ class ComputeNode:
     async def _handle_peer(self, peer: Peer) -> None:
         logger = logging.getLogger(f"ComputeNode[{peer.peer_id}]")
         try:
-            await peer.wait_channel_ready(self._send_timeout, label="compute-node")
+            await peer.connect(self._send_timeout)
         except TimeoutError:
             logger.warning("Data channel never became ready; abandoning peer")
             return
 
         logger.info("Channel open; awaiting jobs")
         while True:
-            if not peer.connected:
+            if not peer._ready.is_set():
                 logger.info("Peer disconnected")
                 return
 

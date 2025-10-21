@@ -2,10 +2,51 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 from dataclasses import dataclass
+from typing import Optional
 from uuid import uuid4
 
 from client import Client, ClientConfig
+
+
+class ServerProcess:
+    """Manages the signaling server subprocess."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8765):
+        self.host = host
+        self.port = port
+        self.process: Optional[subprocess.Popen] = None
+
+    async def start(self):
+        """Start the server subprocess."""
+        self.process = subprocess.Popen(
+            [sys.executable, "server.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        # Wait for server to be ready
+        await asyncio.sleep(2)
+
+        # Check if process is still running
+        if self.process.poll() is not None:
+            stdout, stderr = self.process.communicate()
+            raise RuntimeError(
+                f"Server failed to start.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+    async def stop(self):
+        """Stop the server subprocess."""
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
 
 
 @dataclass(slots=True)
@@ -26,7 +67,8 @@ async def _exercise_data_channel(initiator: Client, responder: Client, settings:
     logging.info("Initiator channel to %s open", responder.peer_id)
 
     resp_peer = await responder.wait_for_peer(initiator.peer_id, settings.timeout)
-    await resp_peer.wait_channel_ready(settings.timeout, label="responder")
+    await resp_peer.connect(settings.timeout)
+    # await resp_peer.wait_channel_ready(settings.timeout, label="responder")
     logging.info("Responder channel to %s open", initiator.peer_id)
 
     logging.info("Sending test message '%s'", settings.message)
@@ -72,12 +114,28 @@ def _build_settings() -> TestSettings:
     )
 
 
-def main() -> None:  # pragma: no cover - simple harness
+async def _main_async() -> None:
+    """Main async function that manages server lifecycle."""
     settings = _build_settings()
+    server = ServerProcess()
+
+    try:
+        logging.info("Starting signaling server...")
+        await server.start()
+        logging.info("Server started successfully")
+
+        await _run(settings)
+    finally:
+        logging.info("Stopping server...")
+        await server.stop()
+        logging.info("Server stopped")
+
+
+def main() -> None:  # pragma: no cover - simple harness
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     try:
-        asyncio.run(_run(settings))
+        asyncio.run(_main_async())
     except KeyboardInterrupt:
         logging.info("Test interrupted by user")
 

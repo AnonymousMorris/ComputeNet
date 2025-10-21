@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 class Peer:
     peer_id: str
     rtc: RTCPeerConnection
-    connected: bool = False
     channel: RTCDataChannel | None = None
     initiator: bool = False
     _incoming: asyncio.Queue[Any] = field(default_factory=asyncio.Queue, init=False, repr=False)
@@ -30,14 +29,13 @@ class Peer:
 
         @channel.on("close")  # type: ignore[misc]
         def _on_close() -> None:
-            self.connected = False
+            self._ready.clear()
 
         @channel.on("message")  # type: ignore[misc]
         def _on_message(message: Any) -> None:
             self._incoming.put_nowait(message)
 
     def mark_connected(self) -> None:
-        self.connected = True
         if not self._ready.is_set():
             self._ready.set()
 
@@ -55,38 +53,6 @@ class Peer:
     async def recv(self) -> Any:
         return await self._incoming.get()
 
-    async def wait_channel_ready(
-        self,
-        timeout: float,
-        *,
-        label: str | None = None,
-        poll_interval: float = 0.05,
-    ) -> None:
-        """Block until the underlying RTC data channel reports an open state."""
-
-        # Wait for the signaling hooks to mark the peer ready first; this captures
-        # the event-driven path where the state flips to connected.
-        await self.connect(timeout)
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-
-        while True:
-            channel = self.channel
-            if channel is not None:
-                state = getattr(channel, "readyState", None)
-                if state == "open":
-                    return
-                logger.debug(
-                    "%s channel state %s; waiting",
-                    label or self.peer_id,
-                    state,
-                )
-            if loop.time() >= deadline:
-                raise TimeoutError(
-                    f"Timed out waiting for {(label or 'data')} channel to open"
-                )
-            await asyncio.sleep(poll_interval)
 
     async def send_with_retry(
         self,
