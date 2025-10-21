@@ -151,8 +151,12 @@ async def attempt_job_dispatch(client: Client, source_path: Path, app_config: Ap
 
     for target_id in candidate_ids:
         logger.info("Attempting to submit '%s' to %s", source_path, target_id)
+        existing_peer = client.peers.get(target_id)
+        peer: Optional[Peer] = None
+        new_connection = False
         try:
             peer = await client.connect_to_peer(target_id, timeout=app_config.request.timeout)
+            new_connection = peer is not existing_peer
         except Exception as exc:
             logger.warning("Failed to connect to %s: %s", target_id, exc)
             continue
@@ -176,7 +180,8 @@ async def attempt_job_dispatch(client: Client, source_path: Path, app_config: Ap
             logger.exception("Unhandled failure while communicating with %s", target_id)
             continue
         finally:
-            await close_peer_connection(client, peer, logger)
+            if peer is not None and new_connection:
+                await close_peer_connection(client, peer, logger)
 
         status = result.get("status")
         if status != "ok":

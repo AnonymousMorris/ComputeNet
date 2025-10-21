@@ -186,6 +186,46 @@ class Client:
     ) -> Peer:
         """High-level helper to negotiate and wait for a ready RTC data channel."""
 
+        existing = self.peers.get(target_id)
+        if existing is not None:
+            channel_state = getattr(existing.channel, "readyState", None)
+            connection_state = (
+                getattr(existing.rtc, "connectionState", None)
+                if existing.rtc is not None
+                else None
+            )
+
+            if channel_state == "closed" or connection_state in {"failed", "closed"}:
+                logger.debug(
+                    "Dropping stale connection to %s (channel=%s, state=%s)",
+                    target_id,
+                    channel_state,
+                    connection_state,
+                )
+                with contextlib.suppress(Exception):
+                    if existing.rtc is not None:
+                        await existing.rtc.close()
+                self.peers.pop(target_id, None)
+            else:
+                try:
+                    await existing.connect(timeout)
+                except TimeoutError:
+                    logger.info(
+                        "Timed out waiting for existing connection to %s; rebuilding",
+                        target_id,
+                    )
+                    with contextlib.suppress(Exception):
+                        if existing.rtc is not None:
+                            await existing.rtc.close()
+                    self.peers.pop(target_id, None)
+                else:
+                    logger.debug(
+                        "Reusing established connection to %s (initiator=%s)",
+                        target_id,
+                        existing.initiator,
+                    )
+                    return existing
+
         await self.request_conn_to_peer(target_id)
         peer = await self.wait_for_peer(target_id, timeout, poll_interval=poll_interval)
         await peer.connect(timeout)
