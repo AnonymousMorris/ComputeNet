@@ -5,6 +5,7 @@ Executes WebAssembly modules using wasmtime.
 
 from pathlib import Path
 import wasmtime
+import websockets
 from job import Job
 import tempfile
 from compiler import Compiler
@@ -76,10 +77,7 @@ if __name__ == "__main__":
     }
     """
 
-    compiler = Compiler()
-    wasm_path = compiler.compile(code)
-
-    executor = WasmExecutor()
-    executor.execute(wasm_path)
-
-    compiler.cleanup()
+    job: Job = Job(code, None)
+    exe: Executor = Executor()
+    exe.execute(job)
+    assert(job.stdout == "Hello World!\n")
