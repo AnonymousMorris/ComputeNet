@@ -5,6 +5,25 @@ Executes WebAssembly modules using wasmtime.
 
 from pathlib import Path
 import wasmtime
+from job import Job
+import tempfile
+from compiler import Compiler
+
+
+class Executor:
+    def __init__(self):
+        self.wasm = WasmExecutor()
+        self.compiler = Compiler()
+
+    def execute(self, job: Job):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            code = job.code
+            path = self.compiler.compile(code, Path(tmp_dir))
+            stdout_path =  Path(tmp_dir) / "output.out"
+            stderr_path = Path(tmp_dir) / "error.out"
+            self.wasm.execute(path, stdout_path, stderr_path)
+            job.stdout = stdout_path.read_text(encoding="utf-8")
+            job.stderr = stderr_path.read_text(encoding="utf-8")
 
 
 class WasmExecutor:
@@ -13,7 +32,7 @@ class WasmExecutor:
     def __init__(self):
         self.engine = wasmtime.Engine()
 
-    def execute(self, wasm_path: str | Path, function_name: str = "_start"):
+    def execute(self, wasm_path: Path, stdout_path: Path, stderr_path: Path, function_name: str = "_start"):
         """
         Execute a WASM module.
 
@@ -24,8 +43,10 @@ class WasmExecutor:
         # Setup WASI
         wasi_config = wasmtime.WasiConfig()
         wasi_config.inherit_stdout()
-        wasi_config.inherit_stderr()
-        wasi_config.inherit_stdin()
+        wasi_config.stdout_file = stdout_path
+        wasi_config.stderr_file = stderr_path
+        # wasi_config.inherit_stderr()
+        # wasi_config.inherit_stdin()
 
         store = wasmtime.Store(self.engine)
         store.set_wasi(wasi_config)

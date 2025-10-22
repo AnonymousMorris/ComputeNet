@@ -12,9 +12,9 @@ class Compiler:
     """Compiles C code to WebAssembly using clang."""
 
     def __init__(self):
-        self.temp_dir = tempfile.mkdtemp(prefix='compiler_')
+        pass
 
-    def compile(self, code: str) -> Path:
+    def compile(self, code: str, temp_dir: Path) -> Path:
         """
         Compile C code to WASM.
 
@@ -25,11 +25,11 @@ class Compiler:
             Path to compiled WASM file
         """
         # Write source file
-        source_file = Path(self.temp_dir) / "source.c"
+        source_file = Path(temp_dir) / "source.c"
         source_file.write_text(code)
 
         # Compile to WASM
-        wasm_file = Path(self.temp_dir) / "output.wasm"
+        wasm_file = Path(temp_dir) / "output.wasm"
 
         result = subprocess.run([
             'clang',
@@ -44,28 +44,3 @@ class Compiler:
             raise Exception(f"Compilation failed:\n{result.stderr}")
 
         return wasm_file
-
-    def cleanup(self):
-        """Clean up temporary files."""
-        import shutil
-        shutil.rmtree(self.temp_dir)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
-
-
-if __name__ == "__main__":
-    code = """
-    #include <stdio.h>
-    int main() {
-        printf("Hello World!\\n");
-        return 0;
-    }
-    """
-
-    with Compiler() as compiler:
-        wasm_path = compiler.compile(code)
-        print(f"Compiled to: {wasm_path}")
