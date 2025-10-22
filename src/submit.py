@@ -28,6 +28,7 @@ async def main(host, port):
         print("stderr")
         print("----------")
         print(result.stderr)
+        return result
 
 
 if __name__ == "__main__":
