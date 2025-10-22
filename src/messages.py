@@ -21,27 +21,23 @@ class BaseMessage:
         return json.dumps(asdict(self))
 
     @staticmethod
-    def from_json(data) -> "Message":
-        obj = json.loads(data)
+    def from_json(data: str) -> "Message":
+        obj: dict = json.loads(data)
         msg_type = obj["type"]
         if msg_type == "SUBMIT_CODE":
-            return SubmitCodeMessage.from_json(obj)
-        elif msg_type == "REGISTER":
-            return RegisterMessage.from_json(obj)
+            return SubmitCodeMessage.from_dict(obj)
+        if msg_type == "RESULT":
+            return ResultResponse.from_dict(obj)
         else:
             raise ValueError(f"Unknown Message Type {msg_type}")
 
-@dataclass
-class RegisterMessage(BaseMessage):
-    pass
 
 @dataclass
 class SubmitCodeMessage(BaseMessage):
     code: str
 
     @staticmethod
-    def from_json(data) -> "SubmitCodeMessage":
-        obj = json.loads(data)
+    def from_dict(obj: dict) -> "SubmitCodeMessage":
         return SubmitCodeMessage(
             type = MessageType(obj["type"]),
             code = obj["code"]
@@ -61,8 +57,7 @@ class ResultResponse(BaseMessage):
         )
 
     @staticmethod
-    def from_json(data) -> "ResultResponse":
-        obj = json.loads(data)
+    def from_dict(obj: dict) -> "ResultResponse":
         return ResultResponse(
             type = MessageType(obj["type"]),
             stdout = obj["stdout"],
@@ -72,7 +67,7 @@ class ResultResponse(BaseMessage):
 
 
 
-Message = Union[RegisterMessage, SubmitCodeMessage, ResultResponse]
+Message = Union[SubmitCodeMessage, ResultResponse]
 
 # @dataclass
 # class NodeResponse:

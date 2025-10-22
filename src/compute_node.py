@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import argparse
 from websockets.asyncio.server import serve
-from messages import BaseMessage, Message, RegisterMessage, SubmitCodeMessage, ResultResponse
+from messages import BaseMessage, Message, SubmitCodeMessage, ResultResponse
 from job import Job, JobStatus
 from CEE import Executor
 
@@ -22,6 +22,7 @@ class ComputeNode:
         await self.q.put(Job(code, conn))
 
     async def handle_client(self, websocket):
+        print("client connected")
         async for message in websocket:
             assert(isinstance(message , str))
             msg: Message = BaseMessage.from_json(message)
